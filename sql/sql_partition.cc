@@ -6143,7 +6143,7 @@ static bool mysql_extract_partition(ALTER_PARTITION_PARAM_TYPE *lpt)
   char from_name[FN_REFLEN + 1], to_name[FN_REFLEN + 1];
   const char *path= lpt->table->s->path.str;
 
-  build_table_filename(to_name, sizeof(to_name) - 1, lpt->alter_ctx->db.str,
+  build_table_filename(to_name, sizeof(to_name) - 1, lpt->alter_ctx->new_db.str,
                        lpt->alter_ctx->new_name.str, "", 0);
 
   for (const partition_element &e: part_info->partitions)

@@ -1,0 +1,65 @@
+--source include/have_partition.inc
+--source include/lcase_names.inc
+
+# TODO:
+#
+# DDL log test, binlog test
+# Add test cases from EXCHANGE
+# Test complex table
+# EXTRACT is keyword, now table names cannot be called like that
+
+create or replace table t1 (x int)
+partition by range(x) (
+  partition p1 values less than (10),
+  partition p2 values less than (20),
+  partition p3 values less than (30),
+  partition p4 values less than (40),
+  partition p5 values less than (50),
+  partition pn values less than maxvalue);
+
+select partition_name, subpartition_name
+from information_schema.partitions
+where table_name = 't1';
+
+insert into t1 values (2), (12), (22), (32), (42), (52);
+
+create or replace table tp2 (y int);
+insert tp2 values (88);
+# Multiple ALTER PARTITION statements are not possible
+--error ER_PARSE_ERROR
+alter table t1 extract partition p2 as table tp2, drop partition p3;
+# TODO: probably no need in such specific codes, should be ER_PARTITION_NON_EXISTENT
+--error ER_DROP_PARTITION_NON_EXISTENT
+alter table t1 extract partition p00 as table tp00;
+# Better error here is ER_DROP_PARTITION_NON_EXISTENT,
+# but mysql_alter_table() works checks new table before anything else.
+# So, looks like no big reason to change anything here.
+--error ER_TABLE_EXISTS_ERROR
+alter table t1 extract partition p00 as table tp2;
+--error ER_TABLE_EXISTS_ERROR
+alter table t1 extract partition p2 as table tp2;
+select * from tp2;
+drop table tp2;
+alter table t1 extract partition p2 as table tp2;
+
+show create table tp2;
+select * from tp2;
+show create table t1;
+select * from t1 order by x;
+
+--error ER_BAD_DB_ERROR
+alter table t1 extract partition p3 as table inexistent.tp3;
+create database EXISTENT;
+alter table t1 extract partition p3 as table EXISTENT.TP3;
+
+if ($MTR_COMBINATION_LCASE1)
+{
+--replace_result tp3 TP3
+}
+show create table EXISTENT.TP3;
+select * from EXISTENT.TP3 order by x;
+show create table t1;
+select * from t1 order by x;
+
+drop database EXISTENT;
+drop tables t1, tp2;

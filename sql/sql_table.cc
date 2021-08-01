@@ -10048,11 +10048,13 @@ do_continue:;
 
       s.frm_image= &frm;
 
-      if (s.init_from_binary_frm_image(thd, true, frm.str, frm.length))
+      if (s.write_frm_image(frm.str, frm.length))
       {
+        my_free((void *)frm.str);
         // FIXME: error
         DBUG_RETURN(true);
       }
+      my_free((void *)frm.str);
     }
     frm= { NULL, 0 };
 
