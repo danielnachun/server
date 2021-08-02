@@ -10020,6 +10020,8 @@ do_continue:;
       LEX_CSTRING new_path= { alter_ctx.get_new_path(), 0 };
       partition_info *work_part_info= thd->work_part_info;
       handlerton *db_type= create_info->db_type;
+      uint create_options= create_info->options;
+      create_info->options&= ~HA_VERSIONED_TABLE;
       new_path.length= strlen(new_path.str);
       tmp_disable_binlog(thd);
       create_info->alias= alter_ctx.table_name;
@@ -10035,11 +10037,13 @@ do_continue:;
       {
         thd->work_part_info= work_part_info;
         create_info->db_type= db_type;
+        create_info->options= create_options;
         // FIXME: error
         DBUG_RETURN(true);
       }
       thd->work_part_info= work_part_info;
       create_info->db_type= db_type;
+      create_info->options= create_options;
       reenable_binlog(thd);
 
       TABLE_SHARE s;

@@ -5364,6 +5364,9 @@ that are reorganised.
     else if ((alter_info->partition_flags & ALTER_PARTITION_DROP) |
              (alter_info->partition_flags & ALTER_PARTITION_EXTRACT))
     {
+      const char * const cmd=
+        (alter_info->partition_flags & ALTER_PARTITION_EXTRACT) ?
+          "EXTRACT" : "DROP";
       /*
         Drop a partition from a range partition and list partitioning is
         always safe and can be made more or less immediate. It is necessary
@@ -5392,7 +5395,7 @@ that are reorganised.
         if (!(tab_part_info->part_type == RANGE_PARTITION ||
               tab_part_info->part_type == LIST_PARTITION))
         {
-          my_error(ER_ONLY_ON_RANGE_LIST_PARTITION, MYF(0), "DROP");
+          my_error(ER_ONLY_ON_RANGE_LIST_PARTITION, MYF(0), cmd);
           goto err;
         }
         if (num_parts_dropped >= tab_part_info->num_parts)
@@ -5434,7 +5437,7 @@ that are reorganised.
       } while (++part_count < tab_part_info->num_parts);
       if (num_parts_found != num_parts_dropped)
       {
-        my_error(ER_DROP_PARTITION_NON_EXISTENT, MYF(0), "DROP");
+        my_error(ER_DROP_PARTITION_NON_EXISTENT, MYF(0), cmd);
         goto err;
       }
       if (table->file->is_fk_defined_on_table_or_index(MAX_KEY))
@@ -5446,6 +5449,12 @@ that are reorganised.
                   num_parts_dropped == 1);
       /* NOTE: num_parts is used in generate_partition_syntax() */
       tab_part_info->num_parts-= num_parts_dropped;
+      if ((alter_info->partition_flags & ALTER_PARTITION_EXTRACT) &&
+          tab_part_info->is_sub_partitioned())
+      {
+        my_error(ER_PARTITION_EXTRACT_SUBPARTITIONED, MYF(0));
+        goto err;
+      }
     }
     else if (alter_info->partition_flags & ALTER_PARTITION_REBUILD)
     {
