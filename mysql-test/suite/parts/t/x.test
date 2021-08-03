@@ -59,18 +59,6 @@ if ($MTR_COMBINATION_LIST)
     partition pn values in (52, 53, 54));
 }
 
-if ($MTR_COMBINATION_HISTORY)
-{
-  let $all= for system_time all order by x;
-  create or replace table t1 (
-    x int,
-    row_start timestamp(6) as row start invisible,
-    row_end timestamp(6) as row end invisible,
-    period for system_time(row_start, row_end)
-  ) with system versioning
-  partition by system_time limit 1 partitions 6;
-}
-
 insert into t1 values (2), (12), (22), (32), (42), (52);
 
 create or replace table tp2 (y int);

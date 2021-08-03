@@ -6138,7 +6138,7 @@ static bool mysql_drop_partitions(ALTER_PARTITION_PARAM_TYPE *lpt)
 }
 
 
-static bool mysql_extract_partition(ALTER_PARTITION_PARAM_TYPE *lpt)
+static bool alter_partition_extract(ALTER_PARTITION_PARAM_TYPE *lpt)
 {
   partition_info *part_info= lpt->table->part_info;
   THD *thd= lpt->thd;
@@ -6157,22 +6157,22 @@ static bool mysql_extract_partition(ALTER_PARTITION_PARAM_TYPE *lpt)
 
   for (const partition_element &e: part_info->partitions)
   {
-    if (e.part_state == PART_TO_BE_DROPPED)
+    if (e.part_state != PART_TO_BE_DROPPED)
+      continue;
+
+    if (unlikely((error= create_partition_name(from_name, sizeof(from_name),
+                                                path, e.partition_name,
+                                                NORMAL_PART_NAME, FALSE))))
     {
-      if (unlikely((error= create_partition_name(from_name, sizeof(from_name),
-                                                 path, e.partition_name,
-                                                 NORMAL_PART_NAME, FALSE))))
-      {
-        return true;
-      }
-      if (unlikely(error= file->ha_rename_table(from_name, to_name)))
-      {
-        lpt->table->file->print_error(error, MYF(0));
-        my_error(ER_ERROR_ON_RENAME, MYF(0), from_name, to_name, my_errno);
-        return true;
-      }
-      break;
+      return true;
     }
+    if (unlikely(error= file->ha_rename_table(from_name, to_name)))
+    {
+      lpt->table->file->print_error(error, MYF(0));
+      my_error(ER_ERROR_ON_RENAME, MYF(0), from_name, to_name, my_errno);
+      return true;
+    }
+    break;
   }
 
   return false;
@@ -7340,7 +7340,7 @@ uint fast_alter_partition_table(THD *thd, TABLE *table,
         (frm_install= FALSE, FALSE) ||
         ERROR_INJECT_CRASH("crash_drop_partition_7") ||
         ERROR_INJECT_ERROR("fail_drop_partition_7") ||
-        mysql_extract_partition(lpt) ||
+        alter_partition_extract(lpt) ||
         ERROR_INJECT_CRASH("crash_drop_partition_8") ||
         ERROR_INJECT_ERROR("fail_drop_partition_8") ||
         (write_log_completed(lpt, FALSE), FALSE) ||
