@@ -7317,38 +7317,36 @@ uint fast_alter_partition_table(THD *thd, TABLE *table,
   else if (alter_info->partition_flags & ALTER_PARTITION_EXTRACT)
   {
     if (write_log_drop_shadow_frm(lpt) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_1") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_1") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_1") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_1") ||
         mysql_write_frm(lpt, WFRM_WRITE_SHADOW) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_2") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_2") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_2") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_2") ||
         wait_while_table_is_used(thd, table, HA_EXTRA_NOT_USED) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_3") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_3") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_3") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_3") ||
         write_log_drop_partition(lpt) ||
         (action_completed= TRUE, FALSE) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_4") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_4") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_4") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_4") ||
         alter_close_table(lpt) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_5") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_5") ||
-        ERROR_INJECT_CRASH("crash_drop_partition_6") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_6") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_5") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_5") ||
         (frm_install= TRUE, FALSE) ||
         mysql_write_frm(lpt, WFRM_INSTALL_SHADOW) ||
         log_partition_alter_to_ddl_log(lpt) ||
         (frm_install= FALSE, FALSE) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_7") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_7") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_7") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_7") ||
         alter_partition_extract(lpt) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_8") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_8") ||
+        ERROR_INJECT_CRASH("crash_extract_partition_8") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_8") ||
         (write_log_completed(lpt, FALSE), FALSE) ||
         ((!thd->lex->no_write_to_binlog) &&
          (write_bin_log(thd, FALSE,
                         thd->query(), thd->query_length()), FALSE)) ||
-        ERROR_INJECT_CRASH("crash_drop_partition_9") ||
-        ERROR_INJECT_ERROR("fail_drop_partition_9"))
+        ERROR_INJECT_CRASH("crash_extract_partition_9") ||
+        ERROR_INJECT_ERROR("fail_extract_partition_9"))
     {
       handle_alter_part_error(lpt, action_completed, TRUE, frm_install);
       goto err;

@@ -5,9 +5,11 @@
 # TODO:
 #
 # DDL log test, binlog test
-# Add test cases from EXCHANGE: SP, PS, TRIGGER, GRANT
+# Add test cases from EXCHANGE: TRIGGER, GRANT
+# PS under SP under LOCK TABLES
 # Test complex table
 # EXTRACT is keyword, now table names cannot be called like that
+# Rename EXTRACT to EXPORT or something else?
 
 create or replace table t1 (x int)
 partition by hash(x) partitions 2;
@@ -105,8 +107,40 @@ select * from EXISTENT.TP3 order by x;
 show create table t1;
 select * from t1 order by x;
 
+--echo # LOCK TABLES
+lock tables t1 write;
+alter table t1 extract partition p4 as table tp4;
+# TODO: lock table tp4 in ALTER TABLE, otherwise there is no
+# guarantee in data consistency between t1 and tp4
+--error ER_TABLE_NOT_LOCKED
+show create table tp4;
+
+unlock tables;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table tp4;
+select * from tp4;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table t1;
+select * from t1 order by x;
+
+--echo # PS
+prepare stmt from 'alter table t1 extract partition p5 as table tp5';
+execute stmt;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table tp5;
+select * from tp5;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table t1;
+select * from t1 order by x;
+drop table tp5;
+--error ER_DROP_PARTITION_NON_EXISTENT
+execute stmt;
+--error ER_DROP_PARTITION_NON_EXISTENT
+execute stmt;
+drop prepare stmt;
+
 drop database EXISTENT;
-drop tables t1, tp2;
+drop tables t1, tp2, tp4;
 
 # FIXME: move to versioning suite
 --echo # System-versioned tables (RANGE, LIST)
@@ -150,6 +184,46 @@ select * from tp2 for system_time all order by x;
 show create table t1;
 select * from t1 order by x;
 select * from t1 for system_time all order by x;
+
+--echo # SP
+create or replace procedure sp()
+alter table t1 extract partition p3 as table tp3;
+call sp;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table tp3;
+select * from tp3;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table t1;
+select * from t1 order by x;
+drop table tp3;
+--error ER_DROP_PARTITION_NON_EXISTENT
+call sp;
+--error ER_DROP_PARTITION_NON_EXISTENT
+call sp;
+drop procedure sp;
+
+--echo # LOCK TABLES, SP
+create or replace procedure sp()
+alter table t1 extract partition p4 as table tp4;
+lock tables t1 write;
+call sp;
+# TODO: don't unlock here
+unlock tables;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table tp4;
+select * from tp4;
+--replace_result $engine X ' PAGE_CHECKSUM=1' ''
+show create table t1;
+select * from t1 order by x;
+drop table tp4;
+lock tables t1 write;
+--error ER_DROP_PARTITION_NON_EXISTENT
+call sp;
+--error ER_DROP_PARTITION_NON_EXISTENT
+call sp;
+unlock tables;
+drop procedure sp;
+unlock tables;
 
 drop tables t1, tp2;
 

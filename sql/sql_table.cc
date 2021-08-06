@@ -10041,6 +10041,7 @@ do_continue:;
       thd->work_part_info= work_part_info;
       create_info->db_type= db_type;
       reenable_binlog(thd);
+      debug_crash_here("ddl_log_alter_partition_after_create_frm");
 
       TABLE_SHARE s;
       init_tmp_table_share(thd, &s, alter_ctx.new_db.str, 0,
@@ -10054,6 +10055,7 @@ do_continue:;
         // FIXME: error
         DBUG_RETURN(true);
       }
+      debug_crash_here("ddl_log_alter_partition_after_write_frm");
       my_free((void *)frm.str);
     }
     frm= { NULL, 0 };

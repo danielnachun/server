@@ -98,8 +98,65 @@ x
 32
 42
 52
+# LOCK TABLES
+lock tables t1 write;
+alter table t1 extract partition p4 as table tp4;
+show create table tp4;
+ERROR HY000: Table 'tp4' was not locked with LOCK TABLES
+unlock tables;
+show create table tp4;
+Table	Create Table
+tp4	CREATE TABLE `tp4` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1
+select * from tp4;
+x
+32
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1
+ PARTITION BY RANGE (`x`)
+(PARTITION `p1` VALUES LESS THAN (10) ENGINE = X,
+ PARTITION `p5` VALUES LESS THAN (50) ENGINE = X,
+ PARTITION `pn` VALUES LESS THAN MAXVALUE ENGINE = X)
+select * from t1 order by x;
+x
+2
+42
+52
+# PS
+prepare stmt from 'alter table t1 extract partition p5 as table tp5';
+execute stmt;
+show create table tp5;
+Table	Create Table
+tp5	CREATE TABLE `tp5` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1
+select * from tp5;
+x
+42
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1
+ PARTITION BY RANGE (`x`)
+(PARTITION `p1` VALUES LESS THAN (10) ENGINE = X,
+ PARTITION `pn` VALUES LESS THAN MAXVALUE ENGINE = X)
+select * from t1 order by x;
+x
+2
+52
+drop table tp5;
+execute stmt;
+ERROR HY000: Error in list of partitions to EXTRACT
+execute stmt;
+ERROR HY000: Error in list of partitions to EXTRACT
+drop prepare stmt;
 drop database EXISTENT;
-drop tables t1, tp2;
+drop tables t1, tp2, tp4;
 # System-versioned tables (RANGE, LIST)
 create or replace table t1 (x int)
 with system versioning
@@ -155,6 +212,77 @@ x
 43
 52
 53
+# SP
+create or replace procedure sp()
+alter table t1 extract partition p3 as table tp3;
+call sp;
+show create table tp3;
+Table	Create Table
+tp3	CREATE TABLE `tp3` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1 WITH SYSTEM VERSIONING
+select * from tp3;
+x
+23
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1 WITH SYSTEM VERSIONING
+ PARTITION BY RANGE (`x`)
+(PARTITION `p1` VALUES LESS THAN (10) ENGINE = X,
+ PARTITION `p4` VALUES LESS THAN (40) ENGINE = X,
+ PARTITION `p5` VALUES LESS THAN (50) ENGINE = X,
+ PARTITION `pn` VALUES LESS THAN MAXVALUE ENGINE = X)
+select * from t1 order by x;
+x
+3
+33
+43
+53
+drop table tp3;
+call sp;
+ERROR HY000: Error in list of partitions to EXTRACT
+call sp;
+ERROR HY000: Error in list of partitions to EXTRACT
+drop procedure sp;
+# LOCK TABLES, SP
+create or replace procedure sp()
+alter table t1 extract partition p4 as table tp4;
+lock tables t1 write;
+call sp;
+unlock tables;
+show create table tp4;
+Table	Create Table
+tp4	CREATE TABLE `tp4` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1 WITH SYSTEM VERSIONING
+select * from tp4;
+x
+33
+show create table t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `x` int(11) DEFAULT NULL
+) ENGINE=X DEFAULT CHARSET=latin1 WITH SYSTEM VERSIONING
+ PARTITION BY RANGE (`x`)
+(PARTITION `p1` VALUES LESS THAN (10) ENGINE = X,
+ PARTITION `p5` VALUES LESS THAN (50) ENGINE = X,
+ PARTITION `pn` VALUES LESS THAN MAXVALUE ENGINE = X)
+select * from t1 order by x;
+x
+3
+43
+53
+drop table tp4;
+lock tables t1 write;
+call sp;
+ERROR HY000: Error in list of partitions to EXTRACT
+call sp;
+ERROR HY000: Error in list of partitions to EXTRACT
+unlock tables;
+drop procedure sp;
+unlock tables;
 drop tables t1, tp2;
 # System-versioned tables (SYSTEM_TIME LIMIT)
 create or replace table t1 (
