@@ -9599,7 +9599,8 @@ bool mysql_alter_table(THD *thd, const LEX_CSTRING *new_db,
                   };);
 #endif // WITH_WSREP
 
-  Alter_table_ctx alter_ctx(thd, table_list, tables_opened, new_db, new_name);
+  Alter_table_ctx alter_ctx(thd, table_list, tables_opened, new_db, new_name,
+                            &ddl_log_state);
   mdl_ticket= table->mdl_ticket;
 
   /*
@@ -10023,10 +10024,9 @@ do_continue:;
       new_path.length= strlen(new_path.str);
       tmp_disable_binlog(thd);
       create_info->alias= alter_ctx.table_name;
-      // FIXME: DDL log
       thd->work_part_info= NULL;
       create_info->db_type= work_part_info->default_engine_type;
-      if (create_table_impl(thd, (DDL_LOG_STATE*) 0, (DDL_LOG_STATE*) 0,
+      if (create_table_impl(thd, &ddl_log_state, (DDL_LOG_STATE*) 0,
                             alter_ctx.new_db, alter_ctx.new_name,
                             alter_ctx.new_db, alter_ctx.new_name, new_path,
                             thd->lex->create_info, create_info, alter_info,
@@ -10035,13 +10035,20 @@ do_continue:;
       {
         thd->work_part_info= work_part_info;
         create_info->db_type= db_type;
-        // FIXME: error
         DBUG_RETURN(true);
       }
       thd->work_part_info= work_part_info;
       create_info->db_type= db_type;
       reenable_binlog(thd);
       debug_crash_here("ddl_log_alter_partition_after_create_frm");
+
+      /* FIXME:
+      if (ddl_log_store_query(thd, &ddl_log_state, thd->query(),
+                              thd->query_length()))
+      {
+        DBUG_RETURN(true);
+      }
+      */
 
       TABLE_SHARE s;
       init_tmp_table_share(thd, &s, alter_ctx.new_db.str, 0,
@@ -10052,7 +10059,6 @@ do_continue:;
       if (s.write_frm_image(frm.str, frm.length))
       {
         my_free((void *)frm.str);
-        // FIXME: error
         DBUG_RETURN(true);
       }
       debug_crash_here("ddl_log_alter_partition_after_write_frm");
