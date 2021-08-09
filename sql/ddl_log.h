@@ -355,7 +355,7 @@ bool ddl_log_alter_table(THD *thd, DDL_LOG_STATE *ddl_state,
                          ulonglong table_version,
                          bool is_renamed);
 bool ddl_log_store_query(THD *thd, DDL_LOG_STATE *ddl_log_state,
-                         const char *query, size_t length);
+                         const char *query, size_t length, bool locked= false);
 void ddl_log_link_events(DDL_LOG_STATE *state, DDL_LOG_STATE *master_state);
 extern mysql_mutex_t LOCK_gdl;
 #endif /* DDL_LOG_INCLUDED */

@@ -6687,12 +6687,10 @@ error:
 }
 
 
-// FIXME: almost the same as write_log_drop_partition
 static bool write_log_extract_partition(ALTER_PARTITION_PARAM_TYPE *lpt)
 {
   partition_info *part_info= lpt->part_info;
   DDL_LOG_MEMORY_ENTRY *log_entry;
-  DDL_LOG_MEMORY_ENTRY *exec_log_entry= part_info->execute_entry;
   char tmp_path[FN_REFLEN + 1];
   char path[FN_REFLEN + 1];
   uint next_entry= 0;
@@ -6718,8 +6716,8 @@ static bool write_log_extract_partition(ALTER_PARTITION_PARAM_TYPE *lpt)
     goto error;
   log_entry= part_info->list;
   part_info->main_entry= log_entry;
-  if (ddl_log_write_execute_entry(log_entry->entry_pos,
-                                  &exec_log_entry))
+  if (ddl_log_store_query(lpt->thd, part_info, lpt->thd->query(),
+                          lpt->thd->query_length(), true))
     goto error;
   release_part_info_log_entries(old_first_log_entry);
   mysql_mutex_unlock(&LOCK_gdl);

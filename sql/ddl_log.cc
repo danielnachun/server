@@ -133,6 +133,7 @@ public:
   char   current_db[NAME_LEN];
   uint   execute_entry_pos;
   ulonglong xid;
+  void binlog_query(THD *thd);
 };
 
 static st_global_ddl_log global_ddl_log;
@@ -1383,8 +1384,14 @@ static int ddl_log_execute_action(THD *thd, MEM_ROOT *mem_root,
 #endif
     }
     else
+    {
       (void) file->ha_rename_table(ddl_log_entry->from_name.str,
                                    ddl_log_entry->name.str);
+
+      // FIXME: make phase
+      if (recovery_state.query.length() && mysql_bin_log.is_open())
+        recovery_state.binlog_query(thd);
+    }
     if (increment_phase(entry_pos))
       break;
     break;
@@ -2186,27 +2193,7 @@ static int ddl_log_execute_action(THD *thd, MEM_ROOT *mem_root,
     {
       /* Write ALTER TABLE query to binary log */
       if (recovery_state.query.length() && mysql_bin_log.is_open())
-      {
-        LEX_CSTRING save_db;
-        /* Reuse old xid value if possible */
-        if (!recovery_state.xid)
-          recovery_state.xid= server_uuid_value();
-        thd->binlog_xid= recovery_state.xid;
-        update_xid(recovery_state.execute_entry_pos, thd->binlog_xid);
-
-        mysql_mutex_unlock(&LOCK_gdl);
-        save_db= thd->db;
-        lex_string_set3(&thd->db, recovery_state.db.ptr(),
-                        recovery_state.db.length());
-        (void) thd->binlog_query(THD::STMT_QUERY_TYPE,
-                                 recovery_state.query.ptr(),
-                                 recovery_state.query.length(),
-                                 TRUE, FALSE, FALSE, 0);
-        thd->binlog_xid= 0;
-        thd->db= save_db;
-        mysql_mutex_lock(&LOCK_gdl);
-      }
-      recovery_state.query.length(0);
+        recovery_state.binlog_query(thd);
       (void) update_phase(entry_pos, DDL_LOG_FINAL_PHASE);
       break;
     }
@@ -3448,7 +3435,7 @@ bool ddl_log_alter_table(THD *thd, DDL_LOG_STATE *ddl_state,
 */
 
 bool ddl_log_store_query(THD *thd, DDL_LOG_STATE *ddl_state,
-                         const char *query, size_t length)
+                         const char *query, size_t length, bool locked)
 {
   DDL_LOG_ENTRY ddl_log_entry;
   DDL_LOG_MEMORY_ENTRY *first_entry, *next_entry= 0;
@@ -3468,7 +3455,8 @@ bool ddl_log_store_query(THD *thd, DDL_LOG_STATE *ddl_state,
 
   max_query_length= ddl_log_free_space_in_entry(&ddl_log_entry);
 
-  mysql_mutex_lock(&LOCK_gdl);
+  if (!locked)
+    mysql_mutex_lock(&LOCK_gdl);
   ddl_log_entry.entry_type= DDL_LOG_ENTRY_CODE;
 
   if (ddl_log_get_free_entry(&first_entry))
@@ -3513,14 +3501,16 @@ bool ddl_log_store_query(THD *thd, DDL_LOG_STATE *ddl_state,
 
   /* Set the original entry to be used for future PHASE updates */
   ddl_state->main_entry= original_entry;
-  mysql_mutex_unlock(&LOCK_gdl);
+  if (!locked)
+    mysql_mutex_unlock(&LOCK_gdl);
   DBUG_RETURN(0);
 err:
   /*
     Allocated ddl_log entries will be released by the
     ddl_log_release_entries() call in dl_log_complete()
   */
-  mysql_mutex_unlock(&LOCK_gdl);
+  if (!locked)
+    mysql_mutex_unlock(&LOCK_gdl);
   DBUG_RETURN(1);
 }
 
@@ -3536,4 +3526,25 @@ void ddl_log_link_events(DDL_LOG_STATE *state, DDL_LOG_STATE *master_state)
 {
   DBUG_ASSERT(master_state->execute_entry);
   state->master_chain_pos= master_state->execute_entry->entry_pos;
+}
+
+
+void st_ddl_recovery::binlog_query(THD *thd)
+{
+  LEX_CSTRING save_db;
+  /* Reuse old xid value if possible */
+  if (!xid)
+    xid= server_uuid_value();
+  thd->binlog_xid= xid;
+  update_xid(execute_entry_pos, thd->binlog_xid);
+
+  mysql_mutex_unlock(&LOCK_gdl);
+  save_db= thd->db;
+  lex_string_set3(&thd->db, db.ptr(), db.length());
+  (void) thd->binlog_query(THD::STMT_QUERY_TYPE, query.ptr(), query.length(),
+                           TRUE, FALSE, FALSE, 0);
+  thd->binlog_xid= 0;
+  thd->db= save_db;
+  mysql_mutex_lock(&LOCK_gdl);
+  query.length(0);
 }

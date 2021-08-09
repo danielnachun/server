@@ -10042,14 +10042,6 @@ do_continue:;
       reenable_binlog(thd);
       debug_crash_here("ddl_log_alter_partition_after_create_frm");
 
-      /* FIXME:
-      if (ddl_log_store_query(thd, &ddl_log_state, thd->query(),
-                              thd->query_length()))
-      {
-        DBUG_RETURN(true);
-      }
-      */
-
       TABLE_SHARE s;
       init_tmp_table_share(thd, &s, alter_ctx.new_db.str, 0,
                            alter_ctx.new_name.str, new_path.str);
