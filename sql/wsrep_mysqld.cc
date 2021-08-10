@@ -2735,13 +2735,13 @@ void wsrep_close_client_connections(my_bool wait_to_end, THD* except_caller_thd)
   */
   server_threads.iterate(kill_remaining_threads, except_caller_thd);
 
-  DBUG_PRINT("quit", ("Waiting for threads to die (count=%u)", THD_count::value()));
-  WSREP_DEBUG("waiting for client connections to close: %u", THD_count::value());
+  DBUG_PRINT("quit", ("Waiting for threads to die (count=%u)", Object_Counter<THD>::value()));
+  WSREP_DEBUG("waiting for client connections to close: %u", Object_Counter<THD>::value());
 
   while (wait_to_end && server_threads.iterate(have_client_connections))
   {
     sleep(1);
-    DBUG_PRINT("quit",("One thread died (count=%u)", THD_count::value()));
+    DBUG_PRINT("quit",("One thread died (count=%u)", Object_Counter<THD>::value()));
   }
 
   /* All client connection threads have now been aborted */

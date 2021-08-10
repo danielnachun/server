@@ -442,7 +442,6 @@ ulong delay_key_write_options;
 uint protocol_version;
 uint lower_case_table_names;
 ulong tc_heuristic_recover= 0;
-Atomic_counter<uint32_t> THD_count::count, CONNECT::count;
 bool shutdown_wait_for_slaves;
 Atomic_counter<uint32_t> slave_open_temp_tables;
 ulong thread_created;
@@ -1715,7 +1714,7 @@ static void close_connections(void)
 #endif
   end_thr_alarm(0);			 // Abort old alarms.
 
-  while (CONNECT::count)
+  while (Object_Counter<CONNECT>::value())
     my_sleep(100);
 
   /*
@@ -1744,9 +1743,9 @@ static void close_connections(void)
     much smaller than even 2 seconds, this is only a safety fallback against
     stuck threads so server shutdown is not held up forever.
   */
-  DBUG_PRINT("info", ("THD_count: %u", THD_count::value()));
+  DBUG_PRINT("info", ("THD count: %u", Object_Counter<THD>::value()));
 
-  for (int i= 0; (THD_count::value() - binlog_dump_thread_count) && i < 1000; i++)
+  for (int i= 0; (Object_Counter<THD>::value() - binlog_dump_thread_count) && i < 1000; i++)
     my_sleep(20000);
 
   if (global_system_variables.log_warnings)
@@ -1759,14 +1758,14 @@ static void close_connections(void)
   }
 #endif
   /* All threads has now been aborted */
-  DBUG_PRINT("quit", ("Waiting for threads to die (count=%u)", THD_count::value()));
+  DBUG_PRINT("quit", ("Waiting for threads to die (count=%u)", Object_Counter<THD>::value()));
 
-  while (THD_count::value() - binlog_dump_thread_count)
+  while (Object_Counter<THD>::value() - binlog_dump_thread_count)
     my_sleep(1000);
 
   /* Kill phase 2 */
   server_threads.iterate(kill_thread_phase_2);
-  for (uint64 i= 0; THD_count::value(); i++)
+  for (uint64 i= 0; Object_Counter<THD>::value(); i++)
   {
     /*
       This time the warnings are emitted within the loop to provide a
@@ -7696,7 +7695,7 @@ static int mysql_init_variables(void)
   mqh_used= 0;
   cleanup_done= 0;
   test_flags= select_errors= dropping_tables= ha_open_options=0;
-  THD_count::count= CONNECT::count= 0;
+  Object_Counter<THD>::count= Object_Counter<CONNECT>::count= 0;
   slave_open_temp_tables= 0;
   opt_endinfo= using_udf_functions= 0;
   opt_using_transactions= 0;

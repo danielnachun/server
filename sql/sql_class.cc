@@ -4883,11 +4883,11 @@ MYSQL_THD create_background_thd()
   thd->set_psi(PSI_CALL_get_thread());
 
   /*
-    Workaround the adverse effect of incrementing thread_count
+    Workaround the adverse effect of incrementing object count
     in THD constructor. We do not want these THDs to be counted,
     or waited for on shutdown.
   */
-  THD_count::count--;
+  Object_Counter<THD>::count--;
 
   thd->mysys_var= (st_my_thread_var *) thd_mysysvar;
   thd->set_command(COM_DAEMON);
@@ -4938,12 +4938,12 @@ void destroy_background_thd(MYSQL_THD thd)
   auto save_mysys_var= thd_attach_thd(thd);
   DBUG_ASSERT(thd_mysys_var != save_mysys_var);
   /*
-    Workaround the adverse effect decrementing thread_count on THD()
+    Workaround the adverse effect decrementing object count on THD
     destructor.
     As we decremented it in create_background_thd(), in order for it
     not to go negative, we have to increment it before destructor.
   */
-  THD_count::count++;
+  Object_Counter<THD>::count++;
   delete thd;
 
   thd_detach_thd(save_mysys_var);

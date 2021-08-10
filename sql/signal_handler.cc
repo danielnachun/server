@@ -187,7 +187,7 @@ extern "C" sig_handler handle_fatal_signal(int sig)
                           (uint) thread_scheduler->max_threads +
                           (uint) extra_max_connections);
 
-  my_safe_printf_stderr("thread_count=%u\n", THD_count::value());
+  my_safe_printf_stderr("thread_count=%u\n", Object_Counter<THD>::value());
 
   if (dflt_key_cache && thread_scheduler)
   {

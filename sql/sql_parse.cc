@@ -2267,7 +2267,7 @@ bool dispatch_command(enum enum_server_command command, THD *thd,
                         "Uptime: %lu  Threads: %u  Questions: %lu  "
                         "Slow queries: %lu  Opens: %lu  "
                         "Open tables: %u  Queries per second avg: %u.%03u",
-                        uptime, THD_count::value(), (ulong) thd->query_id,
+                        uptime, Object_Counter<THD>::value(), (ulong) thd->query_id,
                         current_global_status_var->long_query_count,
                         current_global_status_var->opened_tables,
                         tc_records(),

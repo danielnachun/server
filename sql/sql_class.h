@@ -1080,23 +1080,6 @@ public:
   static THD_list_iterator *iterator();
 };
 
-/**
-  A counter of THDs
-
-  It must be specified as a first base class of THD, so that increment is
-  done before any other THD constructors and decrement - after any other THD
-  destructors.
-
-  Destructor unblocks close_conneciton() if there are no more THD's left.
-*/
-struct THD_count
-{
-  static Atomic_counter<uint32_t> count;
-  static uint value() { return static_cast<uint>(count); }
-  THD_count() { count++; }
-  ~THD_count() { count--; }
-};
-
 #ifdef MYSQL_SERVER
 
 void free_tmp_table(THD *thd, TABLE *entry);
@@ -2291,7 +2274,7 @@ public:
   a thread/connection descriptor
 */
 
-class THD: public THD_count, /* this must be first */
+class THD: public Object_Counter<THD>, /* this must be first */
            public Statement,
            /*
              This is to track items changed during execution of a prepared

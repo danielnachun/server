@@ -46,4 +46,24 @@ public:
   Type operator=(const Type val)
   { m_counter.store(val, std::memory_order_relaxed); return val; }
 };
+
+/**
+  A counter of objects
+
+  It must be specified as a first base class, so that increment is
+  done before any other THD constructors and decrement - after any other
+  destructors.
+
+  Currently used with classes CONNECT and THD to waits until all objects
+  are destroyed in close_connections().
+*/
+template <typename T> struct Object_Counter
+{
+  static Atomic_counter<uint32_t> count;
+  Object_Counter() { count++; }
+  Object_Counter(const Object_Counter &c) { count++; }
+  ~Object_Counter() { count--; }
+  static int value() { return count; }
+};
+template <typename T> Atomic_counter<uint32_t> Object_Counter<T>::count= 0;
 #endif /* MY_COUNTER_H_INCLUDED */
