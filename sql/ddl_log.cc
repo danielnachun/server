@@ -96,7 +96,7 @@ const char *ddl_log_action_name[DDL_LOG_LAST_ACTION]=
 /* Number of phases per entry */
 const uchar ddl_log_entry_phases[DDL_LOG_LAST_ACTION]=
 {
-  0, 1, 1, 2,
+  0, 1, (uchar) RENAME_PHASE_END, 2,
   (uchar) EXCH_PHASE_END, (uchar) DDL_RENAME_PHASE_END, 1, 1,
   (uchar) DDL_DROP_PHASE_END, 1, 1,
   (uchar) DDL_DROP_DB_PHASE_END, (uchar) DDL_CREATE_TABLE_PHASE_END,
@@ -1371,29 +1371,37 @@ static int ddl_log_execute_action(THD *thd, MEM_ROOT *mem_root,
   case DDL_LOG_RENAME_ACTION:
   {
     error= TRUE;
-    if (frm_action)
+    switch (ddl_log_entry->phase) {
+    case RENAME_PHASE_FILE:
     {
-      strxmov(to_path, ddl_log_entry->name.str, reg_ext, NullS);
-      strxmov(from_path, ddl_log_entry->from_name.str, reg_ext, NullS);
-      (void) mysql_file_rename(key_file_frm, from_path, to_path, MYF(MY_WME));
-#ifdef WITH_PARTITION_STORAGE_ENGINE
-      strxmov(to_path, ddl_log_entry->name.str, PAR_EXT, NullS);
-      strxmov(from_path, ddl_log_entry->from_name.str, PAR_EXT, NullS);
-      (void) mysql_file_rename(key_file_partition_ddl_log, from_path, to_path,
-                               MYF(MY_WME));
-#endif
+      if (frm_action)
+      {
+        strxmov(to_path, ddl_log_entry->name.str, reg_ext, NullS);
+        strxmov(from_path, ddl_log_entry->from_name.str, reg_ext, NullS);
+        (void) mysql_file_rename(key_file_frm, from_path, to_path, MYF(MY_WME));
+  #ifdef WITH_PARTITION_STORAGE_ENGINE
+        strxmov(to_path, ddl_log_entry->name.str, PAR_EXT, NullS);
+        strxmov(from_path, ddl_log_entry->from_name.str, PAR_EXT, NullS);
+        (void) mysql_file_rename(key_file_partition_ddl_log, from_path, to_path,
+                                MYF(MY_WME));
+  #endif
+      }
+      else
+        (void) file->ha_rename_table(ddl_log_entry->from_name.str,
+                                    ddl_log_entry->name.str);
+      if (increment_phase(entry_pos))
+        break;
     }
-    else
+    /* fall through */
+    case RENAME_PHASE_BINLOG:
     {
-      (void) file->ha_rename_table(ddl_log_entry->from_name.str,
-                                   ddl_log_entry->name.str);
-
-      // FIXME: make phase
+      /* Write ALTER TABLE query to binary log */
       if (recovery_state.query.length() && mysql_bin_log.is_open())
         recovery_state.binlog_query(thd);
-    }
-    if (increment_phase(entry_pos))
+      (void) update_phase(entry_pos, DDL_LOG_FINAL_PHASE);
       break;
+    }
+    }
     break;
   }
   case DDL_LOG_EXCHANGE_ACTION:

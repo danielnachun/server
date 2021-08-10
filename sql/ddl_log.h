@@ -95,6 +95,11 @@ enum ddl_log_action_code
 /* Number of phases for each ddl_log_action_code */
 extern const uchar ddl_log_entry_phases[DDL_LOG_LAST_ACTION];
 
+enum enum_ddl_log_rename_phase {
+  RENAME_PHASE_FILE= 0,
+  RENAME_PHASE_BINLOG= 1,
+  RENAME_PHASE_END
+};
 
 enum enum_ddl_log_exchange_phase {
   EXCH_PHASE_NAME_TO_TEMP= 0,
