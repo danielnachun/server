@@ -1,0 +1,127 @@
+###############################
+#      Test Setup
+###############################
+SET timestamp=1000000000;
+RESET MASTER;
+SET @@session.gtid_domain_id= 0;
+SET @@session.server_id= 1;
+CREATE TABLE t1 (a int);
+CREATE TABLE t2 (a int);
+INSERT INTO t1 values (1), (2);
+SET @@session.gtid_domain_id= 1;
+SET @@session.server_id= 2;
+SET @@session.gtid_seq_no= 1;
+INSERT INTO t2 values (1);
+INSERT INTO t2 values (2);
+SET @@session.gtid_domain_id= 0;
+SET @@session.server_id= 1;
+SET @@session.gtid_seq_no= 0;;
+INSERT INTO t1 values (3), (4);
+SET @@session.gtid_domain_id= 1;
+SET @@session.server_id= 2;
+SET @@session.gtid_seq_no= 0;;
+INSERT INTO t2 values (3);
+INSERT INTO t2 values (4);
+INSERT INTO t2 values (5);
+SET @@session.server_id= 3;
+SET @@session.gtid_seq_no= 1;
+SET @@session.gtid_seq_no= 0;;
+INSERT INTO t2 values (6);
+INSERT INTO t2 values (7);
+SET @@session.server_id= 2;
+SET @@session.gtid_seq_no= 0;;
+INSERT INTO t2 values (8);
+FLUSH LOGS;
+###############################
+#      Test Cases
+###############################
+#
+##  Test Case 1:
+#   The output filtered by GTID ranges can be piped back into the
+# MariaDB client
+DROP TABLE t1;
+DROP TABLE t2;
+show tables;
+Tables_in_test
+t1
+t2
+#
+##  Test Case 2:
+#   The end of the binlog file resets the server and domain id of the
+# session
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER  > OUT_FILE
+SET @@SESSION.SERVER_ID=@@GLOBAL.SERVER_ID
+SET @@SESSION.GTID_DOMAIN_ID=@@GLOBAL.GTID_DOMAIN_ID
+#
+##  Test Case 3:
+#   Local file, single GTID range specified
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER  > OUT_FILE
+end_log_pos # CRC32 XXX 	Start: binlog v 4, server v #.##.## created 010908 19:46:40 at startup
+end_log_pos # CRC32 XXX 	GTID 0-1-2 ddl
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 0-1-3
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t1` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 0-1-4
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t1` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+#
+##  Test Case 4:
+#   Local file, multiple GTID ranges specified
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,1-2-0 --stop-position=0-1-4,1-2-3 --base64-output=NEVER  > OUT_FILE
+end_log_pos # CRC32 XXX 	Start: binlog v 4, server v #.##.## created 010908 19:46:40 at startup
+end_log_pos # CRC32 XXX 	GTID 0-1-2 ddl
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 0-1-3
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t1` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 1-2-1
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t2` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 1-2-2
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t2` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 0-1-4
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t1` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+end_log_pos # CRC32 XXX 	GTID 1-2-3
+end_log_pos # CRC32 XXX 	Annotate_rows:
+end_log_pos # CRC32 XXX 	Table_map: `test`.`t2` mapped to number #
+end_log_pos # CRC32 XXX 	Write_rows: table id # flags: STMT_END_F
+end_log_pos # CRC32 XXX 	Query	thread_id=#	exec_time=#	error_code=0	xid=#
+#
+##  Test Case 5:
+#   Local file, multiple GTID ranges specified where the domain ids are
+# listed in different orders between start/stop position
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --stop-position=0-1-4,1-2-3 --start-position=1-2-0,0-1-1 --base64-output=NEVER > MYSQLTEST_VARDIR/tmp/binlog2.out
+# --diff_files OUT_FILE MYSQLTEST_VARDIR/tmp/binlog2.out
+##############################
+#      Error Cases
+##############################
+#
+##  Error Case 1:
+#   User provides GTID ranges with mismatched domain_ids
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=1-1-4 --base64-output=NEVER  > OUT_FILE
+#
+##  Error Case 2:
+#   User provides GTID ranges with repeated domain ids
+# MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,0-1-8 --stop-position=0-1-4,0-1-12 --base64-output=NEVER  > OUT_FILE
+##############################
+#      Cleanup
+##############################
+DROP TABLE t1;
+DROP TABLE t2;
+SET @@global.gtid_domain_id= 0;
+SET @@global.server_id= 1;

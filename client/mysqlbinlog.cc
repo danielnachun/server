@@ -143,9 +143,40 @@ static char *charset= 0;
 
 static uint verbose= 0;
 
-static ulonglong start_position, stop_position;
+static char *start_pos_str, *stop_pos_str;
+static ulonglong start_position= BIN_LOG_HEADER_SIZE,
+                 stop_position= (longlong)(~(my_off_t)0) ;
 #define start_position_mot ((my_off_t)start_position)
 #define stop_position_mot  ((my_off_t)stop_position)
+
+/**
+  An individual window to filter events by. The variable start (exclusive)
+  marks the GTID that begins the range.  The variable stop (inclusive) marks
+  the GTID that ends the range. The boolean is_activated indicates whether or
+  not the program is currently reading events from within this window. The next
+  pointer is used to link multiple ranges together, if provided.
+ */
+typedef struct _gtid_window_node
+{
+  struct _gtid_window_node *next;
+  rpl_gtid *start, *stop;
+  my_bool is_activated;
+} gtid_window_node;
+
+/*
+  To reduce time to find a gtid window, they are indexed by domain_id. More
+  specifically, domain_ids are arranged into DOMAIN_ID_LOOKUP_MASK+1 buckets,
+  and each bucket is a linked list of gtid_window_nodes that share the same
+  index. The index itself is found by a bitwise and, i.e.
+      some_rpl_gtid.domain_id & DOMAIN_ID_LOOKUP_MASK
+ */
+#define DOMAIN_ID_LOOKUP_MASK 15
+static gtid_window_node **gtid_windows_by_domain;
+
+static uint32 n_gtid_ranges= 0;
+static uint32 n_complete_gtid_ranges= 0;
+static rpl_gtid *start_gtids, *stop_gtids;
+static my_bool is_event_gtid_active= FALSE;
 
 static char *start_datetime_str, *stop_datetime_str;
 static my_time_t start_datetime= 0, stop_datetime= MY_TIME_T_MAX;
@@ -981,6 +1012,151 @@ static bool print_row_event(PRINT_EVENT_INFO *print_event_info, Log_event *ev,
   return result;
 }
 
+static inline my_bool is_gtid_filtering_enabled()
+{
+  return gtid_windows_by_domain != NULL;
+}
+
+/*
+  Where the binlog is processed sequentially, the variable is_event_gtid_active
+  keeps track of the state of active event groups. When a new Gtid_log_event is
+  read, if it should be output, this function will return true. Otherwise, this
+  function will return false.
+ */
+static inline my_bool is_event_group_active()
+{
+  return is_event_gtid_active;
+}
+
+/*
+  When a Gtid_log_event marks a GTID that should be output, this function is
+  invoked to change the program state to start writing binlog events until
+  the event group has ended.
+ */
+static inline void activate_current_event_group()
+{
+  is_event_gtid_active= TRUE;
+}
+
+/*
+  When an active event group has written its last event, this function is
+  invoked to change the program state to stop writing events.
+ */
+static inline void deactivate_current_event_group()
+{
+  is_event_gtid_active= FALSE;
+}
+
+static inline my_bool is_gtid_after_window(gtid_window_node *window,
+                                           uint32 domain_id, uint32 server_id,
+                                           uint64 seq_no)
+{
+  return domain_id == window->stop->domain_id &&
+         server_id == window->stop->server_id &&
+         seq_no >= window->stop->seq_no;
+}
+
+static inline my_bool is_gtid_within_window(gtid_window_node *window,
+                                           uint32 domain_id, uint32 server_id,
+                                           uint64 seq_no)
+{
+  return domain_id == window->start->domain_id &&
+         server_id == window->start->server_id &&
+         seq_no >= window->start->seq_no &&
+         seq_no < window->stop->seq_no;
+}
+
+static inline gtid_window_node *create_gtid_window_node()
+{
+  gtid_window_node *new_window= (gtid_window_node *) my_malloc(
+      PSI_NOT_INSTRUMENTED, sizeof(gtid_window_node), MYF(MY_WME));
+  new_window->next= NULL;
+  new_window->is_activated= FALSE;
+  new_window->start= NULL;
+  new_window->stop= NULL;
+  return new_window;
+}
+
+/**
+  Check if the log events that correspond to an input Gtid_log_event should be
+  filtered out of the binlog output.
+ */
+static void filter_gtid(Gtid_log_event *gle)
+{
+  DBUG_ENTER("filter_gtid");
+  DBUG_ASSERT(gtid_windows_by_domain != NULL);
+
+  /*
+    Check if our domain id has an active window.
+    If so, check if we should deactivate it.
+    If not, check if we should activate it.
+  */
+  int map_idx= gle->domain_id & DOMAIN_ID_LOOKUP_MASK;
+  gtid_window_node *window_iterator= gtid_windows_by_domain[map_idx];
+  while (window_iterator)
+  {
+    if (window_iterator->start->domain_id == gle->domain_id)
+    {
+      if (window_iterator->is_activated)
+      {
+        /*
+         We are active. Check if we should deactivate. Update flag
+         */
+        if (is_gtid_after_window(window_iterator, gle->domain_id,
+                                 gle->server_id, gle->seq_no))
+        {
+          DBUG_PRINT("gtid-filtering", ("End window (%d-%d-%d, %d-%d-%llu]",
+                                        window_iterator->start->domain_id,
+                                        window_iterator->start->server_id,
+                                        window_iterator->start->seq_no,
+                                        window_iterator->stop->domain_id,
+                                        window_iterator->stop->server_id,
+                                        window_iterator->stop->seq_no));
+          window_iterator->is_activated= FALSE;
+        }
+
+        /*
+          Even if we deactivate this window, we want to output the last
+          event anyway.
+         */
+        activate_current_event_group();
+      } // end if (window_iterator->is_activated)
+      else
+      {
+        /* Window is not active. Check if we should activate it. */
+        if (is_gtid_within_window(window_iterator, gle->domain_id,
+                                  gle->server_id, gle->seq_no))
+        {
+          window_iterator->is_activated= TRUE;
+
+          if (gle->seq_no > window_iterator->start->seq_no)
+          {
+            /*
+              start_gtid->seq_no should be ignored, but anything following
+              should be included
+            */
+            activate_current_event_group();
+          }
+
+          DBUG_PRINT("gtid-filtering", ("Begin window (%d-%d-%d, %d-%d-%llu]",
+                                        window_iterator->start->domain_id,
+                                        window_iterator->start->server_id,
+                                        window_iterator->start->seq_no,
+                                        window_iterator->stop->domain_id,
+                                        window_iterator->stop->server_id,
+                                        window_iterator->stop->seq_no));
+        }
+      } // end if (window_iterator->is_activated)
+
+      break;
+    } /* end if (window_iterator->start->domain_id == gle->domain_id) */
+
+    /* Haven't found a GTID window for this event, continue search */
+    window_iterator= window_iterator->next;
+  }
+
+  DBUG_VOID_RETURN;
+}
 
 /**
   Print the given event, and either delete it or delegate the deletion
@@ -1019,11 +1195,21 @@ Exit_status process_event(PRINT_EVENT_INFO *print_event_info, Log_event *ev,
 #endif
 
   /*
+    If the binlog output should be filtered using GTIDs, test the new event
+    group to see if its events should be written or ignored.
+   */
+  if (ev_type == GTID_EVENT && is_gtid_filtering_enabled())
+  {
+    filter_gtid((Gtid_log_event *) ev);
+  }
+
+  /*
     Format events are not concerned by --offset and such, we always need to
     read them to be able to process the wanted events.
   */
   if (((rec_count >= offset) &&
-       (ev->when >= start_datetime)) ||
+       (ev->when >= start_datetime) &&
+       (!is_gtid_filtering_enabled() || is_event_group_active())) ||
       (ev_type == FORMAT_DESCRIPTION_EVENT))
   {
     if (ev_type != FORMAT_DESCRIPTION_EVENT)
@@ -1500,6 +1686,12 @@ end:
       }
     }
 
+    /* Xid_log_events or Query_log_events mark the end of a GTID event group. */
+    if ((ev_type == XID_EVENT || ev_type == QUERY_EVENT) && is_event_group_active())
+    {
+      deactivate_current_event_group();
+    }
+
     if (destroy_evt) /* destroy it later if not set (ignored table map) */
       delete ev;
   }
@@ -1657,16 +1849,12 @@ static struct my_option my_options[] =
    "(you should probably use quotes for your shell to set it properly).",
    &start_datetime_str, &start_datetime_str,
    0, GET_STR_ALLOC, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+  /* TODO: Extend start-position description to include GTID*/
   {"start-position", 'j',
    "Start reading the binlog at position N. Applies to the first binlog "
    "passed on the command line.",
-   &start_position, &start_position, 0, GET_ULL,
-   REQUIRED_ARG, BIN_LOG_HEADER_SIZE, BIN_LOG_HEADER_SIZE,
-   /*
-     COM_BINLOG_DUMP accepts only 4 bytes for the position
-     so remote log reading has lower limit.
-   */
-   (ulonglong)(0xffffffffffffffffULL), 0, 0, 0},
+   &start_pos_str, &start_pos_str, 0, GET_STR_ALLOC,
+   REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
   {"stop-datetime", OPT_STOP_DATETIME,
    "Stop reading the binlog at first event having a datetime equal or "
    "posterior to the argument; the argument must be a date and time "
@@ -1683,12 +1871,12 @@ static struct my_option my_options[] =
    "The slave server_id used for --read-from-remote-server --stop-never.",
    &opt_stop_never_slave_server_id, &opt_stop_never_slave_server_id, 0,
    GET_ULONG, REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
+  /* TODO: Extend stop-position description to include GTID*/
   {"stop-position", OPT_STOP_POSITION,
    "Stop reading the binlog at position N. Applies to the last binlog "
    "passed on the command line.",
-   &stop_position, &stop_position, 0, GET_ULL,
-   REQUIRED_ARG, (longlong)(~(my_off_t)0), BIN_LOG_HEADER_SIZE,
-   (ulonglong)(~(my_off_t)0), 0, 0, 0},
+   &stop_pos_str, &stop_pos_str, 0, GET_STR_ALLOC,
+   REQUIRED_ARG, 0, 0, 0, 0, 0, 0},
   {"table", 'T', "List entries for just this table (local log only).",
    &table, &table, 0, GET_STR_ALLOC, REQUIRED_ARG,
    0, 0, 0, 0, 0, 0},
@@ -1810,6 +1998,56 @@ static void warning(const char *format,...)
   va_end(args);
 }
 
+static inline Exit_status ensure_gtid_window_map_initialized()
+{
+  if (gtid_windows_by_domain == NULL)
+  {
+    int window_initializer;
+
+    // Need to initialize the map for active windows
+    gtid_windows_by_domain= (gtid_window_node **) my_malloc(
+        PSI_NOT_INSTRUMENTED,
+        (DOMAIN_ID_LOOKUP_MASK + 1) * sizeof(gtid_window_node *),
+        MYF(MY_WME));
+
+    if (!gtid_windows_by_domain)
+    {
+      fprintf(stderr, "Failed to allocate memory for active_window_by_domain");
+      return ERROR_STOP;
+    }
+
+    for (window_initializer= 0; window_initializer <= DOMAIN_ID_LOOKUP_MASK;
+         window_initializer++)
+    {
+      gtid_windows_by_domain[window_initializer]= NULL;
+    }
+  }
+
+  return OK_CONTINUE;
+}
+
+static void cleanup_gtid_window_map()
+{
+  int i;
+
+  if(gtid_windows_by_domain == NULL)
+    return;
+
+  for (i = 0; i < DOMAIN_ID_LOOKUP_MASK; i++)
+  {
+    gtid_window_node *window= gtid_windows_by_domain[i];
+
+    while(window)
+    {
+      gtid_window_node *to_free= window;
+      window= window->next;
+      my_free(to_free);
+    }
+  }
+
+  my_free(gtid_windows_by_domain);
+}
+
 /**
   Frees memory for global variables in this file.
 */
@@ -1824,7 +2062,14 @@ static void cleanup()
   my_free(const_cast<char*>(dirname_for_local_load));
   my_free(start_datetime_str);
   my_free(stop_datetime_str);
+  my_free(start_pos_str);
+  my_free(stop_pos_str);
+  my_free(start_gtids);
+  my_free(stop_gtids);
   free_root(&glob_root, MYF(0));
+
+
+  cleanup_gtid_window_map();
 
   delete binlog_filter;
   delete glob_description_event;
@@ -1891,6 +2136,83 @@ static my_time_t convert_str_to_timestamp(const char* str)
     my_system_gmt_sec(&l_time, &dummy_my_timezone, &dummy_in_dst_time_gap);
 }
 
+/*
+  Parse a GTID at the start of a string, and update the pointer to point
+  at the first character after the parsed GTID.
+
+  Returns 0 on ok, non-zero on parse error.
+
+  Note: This was copied from rpl_gtid.cc - would it be beneficial to add
+        rpl_gtid.cc as a dependency of mysqlbinlog?
+*/
+static int
+gtid_parser_helper(const char **ptr, const char *end, rpl_gtid *out_gtid)
+{
+  char *q;
+  const char *p= *ptr;
+  uint64 v1, v2, v3;
+  int err= 0;
+
+  q= (char*) end;
+  v1= (uint64)my_strtoll10(p, &q, &err);
+  if (err != 0 || v1 > (uint32)0xffffffff || q == end || *q != '-')
+    return 1;
+  p= q+1;
+  q= (char*) end;
+  v2= (uint64)my_strtoll10(p, &q, &err);
+  if (err != 0 || v2 > (uint32)0xffffffff || q == end || *q != '-')
+    return 1;
+  p= q+1;
+  q= (char*) end;
+  v3= (uint64)my_strtoll10(p, &q, &err);
+  if (err != 0)
+    return 1;
+
+  out_gtid->domain_id= (uint32) v1;
+  out_gtid->server_id= (uint32) v2;
+  out_gtid->seq_no= v3;
+  *ptr= q;
+  return 0;
+}
+
+
+rpl_gtid *
+gtid_parse_string_to_list(const char *str, size_t str_len, uint32 *out_len)
+{
+  const char *p= const_cast<char *>(str);
+  const char *end= p + str_len;
+  uint32 len= 0, alloc_len= 5;
+  rpl_gtid *list= NULL;
+
+  for (;;)
+  {
+    rpl_gtid gtid;
+
+    if (len >= (((uint32)1 << 28)-1) || gtid_parser_helper(&p, end, &gtid))
+    {
+      my_free(list);
+      return NULL;
+    }
+    if ((!list || len >= alloc_len) &&
+        !(list=
+          (rpl_gtid *)my_realloc(PSI_INSTRUMENT_ME, list,
+                                 (alloc_len= alloc_len*2) * sizeof(rpl_gtid),
+                                 MYF(MY_FREE_ON_ERROR|MY_ALLOW_ZERO_PTR))))
+      return NULL;
+    list[len++]= gtid;
+
+    if (p == end)
+      break;
+    if (*p != ',')
+    {
+      my_free(list);
+      return NULL;
+    }
+    ++p;
+  }
+  *out_len= len;
+  return list;
+}
 
 extern "C" my_bool
 get_one_option(const struct my_option *opt, const char *argument, const char *filename)
@@ -2075,6 +2397,199 @@ get_one_option(const struct my_option *opt, const char *argument, const char *fi
     print_version();
     opt_version= 1;
     break;
+  case OPT_STOP_POSITION:
+  {
+    int err= 0;
+    stop_gtids= gtid_parse_string_to_list(stop_pos_str, strlen(stop_pos_str),
+                                          &n_gtid_ranges);
+    if (stop_gtids == NULL)
+    {
+      /*
+        No GTIDs specified in OPT_STOP_POSITION specification. Treat the value
+        as a singular index.
+       */
+      stop_position= my_strtoll10(stop_pos_str, NULL, &err);
+    }
+    else if (n_gtid_ranges > 0)
+    {
+      uint32 gtid_idx;
+      uint32 n_inserted_gtids= 0;
+
+      if (ensure_gtid_window_map_initialized() == ERROR_STOP)
+      {
+        return 1;
+      }
+
+      for (gtid_idx = 0; gtid_idx < n_gtid_ranges; gtid_idx++)
+      {
+        rpl_gtid *stop_gtid= &stop_gtids[gtid_idx];
+        int map_idx= stop_gtid->domain_id & DOMAIN_ID_LOOKUP_MASK;
+
+        /*
+          Binlog search windows exist, find the corresponding one in this
+          bucket or make a new one
+         */
+        gtid_window_node *window_idx= gtid_windows_by_domain[map_idx],
+                         *prev_window= NULL;
+
+        while (window_idx)
+        {
+          prev_window= window_idx;
+
+          if (window_idx->start &&
+              window_idx->start->domain_id == stop_gtid->domain_id)
+          {
+            /*
+              This window was created by start-position already, fill in
+              the start
+             */
+
+            if (window_idx->stop)
+            {
+              // Window has already been completed, domain ids are not unique
+              fprintf(stderr, "ERROR: Domain IDs must be unique in --stop-position.\n");
+              die();
+            }
+
+            n_inserted_gtids++;
+            n_complete_gtid_ranges++;
+            window_idx->stop= stop_gtid;
+            break;
+          }
+
+          /*
+            Move to next window in the bucket to see if we can complete a
+            window
+           */
+          window_idx= window_idx->next;
+        }
+
+        if (window_idx == NULL)
+        {
+          // stop_gtid was not inserted, create a new window
+          gtid_window_node *new_window= create_gtid_window_node();
+          new_window->stop= stop_gtid;
+          if (prev_window == NULL)
+          {
+            // First element in bucket
+            gtid_windows_by_domain[map_idx]= new_window;
+          }
+          else
+          {
+            // Add element to end of bucket
+            prev_window->next= new_window;
+          }
+
+          n_inserted_gtids++;
+        }
+      }
+
+      DBUG_ASSERT(n_inserted_gtids == n_gtid_ranges);
+    }
+    else
+    {
+      // Can't parse the position from the user
+      DBUG_ASSERT(0);
+    }
+    break;
+  }
+  case 'j':
+  {
+    int err= 0;
+    start_gtids= gtid_parse_string_to_list(
+        start_pos_str, strlen(start_pos_str), &n_gtid_ranges);
+
+    if (start_gtids == NULL)
+    {
+      /*
+        No GTIDs specified in OPT_START_POSITION specification. Treat the value
+        as a singular index.
+       */
+      start_position= my_strtoll10(start_pos_str, NULL, &err);
+    }
+    else if (n_gtid_ranges > 0)
+    {
+      uint32 gtid_idx;
+      uint32 n_inserted_gtids= 0;
+
+      if (ensure_gtid_window_map_initialized() == ERROR_STOP)
+      {
+        return 1;
+      }
+
+      for (gtid_idx = 0; gtid_idx < n_gtid_ranges; gtid_idx++)
+      {
+        rpl_gtid *start_gtid= &start_gtids[gtid_idx];
+        int map_idx= start_gtid->domain_id & DOMAIN_ID_LOOKUP_MASK;
+
+        /*
+         Binlog search windows exist, find the corresponding one in this
+         bucket or make a new one
+         */
+        gtid_window_node *window_idx= gtid_windows_by_domain[map_idx],
+                         *prev_window= NULL;
+
+        while (window_idx)
+        {
+          prev_window= window_idx;
+
+          if (window_idx->stop &&
+              window_idx->stop->domain_id == start_gtid->domain_id)
+          {
+            /*
+              This window was created by stop-position already, fill in
+              the start
+             */
+
+            if (window_idx->start)
+            {
+              // Window has already been completed, domain ids are not unique
+              fprintf(stderr, "ERROR: Domain IDs must be unique in --start-position.\n");
+              die();
+            }
+
+            n_inserted_gtids++;
+            n_complete_gtid_ranges++;
+            window_idx->start= start_gtid;
+            break;
+          }
+
+          /*
+            Move to next window in the bucket to see if we can complete a
+            window
+           */
+          window_idx= window_idx->next;
+        }
+
+        if (window_idx == NULL)
+        {
+          // start_gtid was not inserted, create a new window
+          gtid_window_node *new_window= create_gtid_window_node();
+          new_window->start= start_gtid;
+          if (prev_window == NULL)
+          {
+            // First element in bucket
+            gtid_windows_by_domain[map_idx]= new_window;
+          }
+          else
+          {
+            // Add element to end of bucket
+            prev_window->next= new_window;
+          }
+
+          n_inserted_gtids++;
+        }
+      }
+
+      DBUG_ASSERT(n_inserted_gtids == n_gtid_ranges);
+    }
+    else
+    {
+      // Can't parse the position from the user
+      DBUG_ASSERT(0);
+    }
+    break;
+  }
   case '?':
     usage();
     opt_version= 1;
@@ -2095,6 +2610,15 @@ static int parse_args(int *argc, char*** argv)
   {
     die();
   }
+
+  if (n_gtid_ranges && n_complete_gtid_ranges != n_gtid_ranges)
+  {
+    fprintf(stderr,
+            "ERROR: Not all GTIDS specified by --start-position have "
+            "counterparts with matching domain ids in --stop-position.\n");
+    die();
+  }
+
   if (debug_info_flag)
     my_end_arg= MY_CHECK_ERROR | MY_GIVE_INFO;
   else if (debug_check_flag)
@@ -3210,6 +3734,14 @@ int main(int argc, char** argv)
               "/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n");
 
     fprintf(result_file, "/*!50530 SET @@SESSION.PSEUDO_SLAVE_MODE=0*/;\n");
+
+    if (is_gtid_filtering_enabled())
+    {
+      fprintf(result_file,
+              "/*!100001 SET @@SESSION.SERVER_ID=@@GLOBAL.SERVER_ID */;\n"
+              "/*!100001 SET @@SESSION.GTID_DOMAIN_ID=@@GLOBAL.GTID_DOMAIN_ID "
+              "*/;\n");
+    }
   }
 
   if (tmpdir.list)

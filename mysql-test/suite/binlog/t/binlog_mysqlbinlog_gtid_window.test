@@ -1,0 +1,193 @@
+#
+# Purpose:
+#   This test ensures that the mariadb-binlog CLI tool can filter log events
+# using GTID ranges. More specifically, this test ensures the following
+# capabilities:
+#   1) GTIDs can be used to filter results on local binlog files
+#   2) GTIDs can be used to filter results from remote servers
+#   3) For a given GTID range, its start-position is exclusive and its
+#      stop-position is inclusive
+#   4) After the events have been written, the session server id and domain id
+#      are reset to their former values
+#   5) Output filtered by GTID ranges can be piped to the MariaDB client
+#
+# Methodology:
+#   This test validates the expected capabilities using the following test
+# cases:
+#   Test Case 1) The output filtered by GTID ranges can be piped back into the
+#                MariaDB client
+#   Test Case 2) The end of the binlog file resets the server and domain id of
+#                the session
+#   Test Case 3) Local file, single GTID range specified
+#   Test Case 4) Local file, multiple GTID ranges specified
+#   Test Case 5) Local file, multiple GTID ranges specified where the domain
+#                ids are listed in different orders between start/stop position
+#   TODO Test Case 6) Dump from a remote host showing only events within one
+#                GTID range
+#   TODO Test Case 7) Dump from a remote host showing only events within
+#                multiple GTID ranges
+#
+#   Additionally, this test validates the following error scenarios:
+#   Err Case 1) Not all GTIDS specified by --start-position have counterparts
+#               with matching domain ids in --stop-position
+#   Err Case 2) The GTID ranges specified have repeat domain ids
+#
+# References:
+#   MDEV-4989: Support for GTID in mysqlbinlog
+#
+
+--source include/have_log_bin.inc
+--source include/have_binlog_format_row.inc
+
+--echo ###############################
+--echo #      Test Setup
+--echo ###############################
+
+## Fix timestamp to avoid varying results.
+#
+SET timestamp=1000000000;
+RESET MASTER;
+
+## Save old state
+#
+let $OLD_GTID_DOMAIN_ID = `select @@session.gtid_domain_id`;
+let $OLD_SERVER_ID = `select @@session.server_id`;
+
+## Configure test variables
+#
+--let $MYSQLD_DATADIR=`select @@datadir`
+--let OUT_FILE=$MYSQLTEST_VARDIR/tmp/binlog.out
+--let SEARCH_OUTPUT=matches
+--let SEARCH_FILE=$OUT_FILE
+--let SEARCH_PATTERN=end_log_pos[^\n]+
+
+## Initialize test data
+#
+SET @@session.gtid_domain_id= 0;
+SET @@session.server_id= 1;
+
+CREATE TABLE t1 (a int);
+CREATE TABLE t2 (a int);
+
+INSERT INTO t1 values (1), (2);
+let $DOM0_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+SET @@session.gtid_domain_id= 1;
+SET @@session.server_id= 2;
+SET @@session.gtid_seq_no= 1;
+INSERT INTO t2 values (1);
+INSERT INTO t2 values (2);
+let $DOM1_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+SET @@session.gtid_domain_id= 0;
+SET @@session.server_id= 1;
+--eval SET @@session.gtid_seq_no= $DOM0_LAST_SEQ_NO;
+INSERT INTO t1 values (3), (4);
+let $DOM0_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+SET @@session.gtid_domain_id= 1;
+SET @@session.server_id= 2;
+--eval SET @@session.gtid_seq_no= $DOM1_LAST_SEQ_NO;
+INSERT INTO t2 values (3);
+INSERT INTO t2 values (4);
+INSERT INTO t2 values (5);
+let $DOM1_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+SET @@session.server_id= 3;
+SET @@session.gtid_seq_no= 1;
+--eval SET @@session.gtid_seq_no= $DOM1_LAST_SEQ_NO;
+INSERT INTO t2 values (6);
+INSERT INTO t2 values (7);
+let $DOM1_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+SET @@session.server_id= 2;
+--eval SET @@session.gtid_seq_no= $DOM1_LAST_SEQ_NO;
+INSERT INTO t2 values (8);
+let $DOM1_LAST_SEQ_NO= `select @@session.gtid_seq_no`;
+
+FLUSH LOGS;
+
+
+--echo ###############################
+--echo #      Test Cases
+--echo ###############################
+
+--echo #
+--echo ##  Test Case 1:
+--echo #   The output filtered by GTID ranges can be piped back into the
+--echo # MariaDB client
+DROP TABLE t1;
+DROP TABLE t2;
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-0,1-2-0 --stop-position=0-1-8,1-2-8 | $MYSQL
+show tables;
+
+--echo #
+--echo ##  Test Case 2:
+--echo #   The end of the binlog file resets the server and domain id of the
+--echo # session
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER  > OUT_FILE
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER > $OUT_FILE
+--let SEARCH_PATTERN=SET @@SESSION\.[\w]*_ID[\h]*=[\h]*@@GLOBAL\.[\w]+_ID
+--source include/search_pattern_in_file.inc
+
+--echo #
+--echo ##  Test Case 3:
+--echo #   Local file, single GTID range specified
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER  > OUT_FILE
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=0-1-4 --base64-output=NEVER > $OUT_FILE
+--let SEARCH_PATTERN=end_log_pos[^\n]+
+--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
+--replace_regex /SQL_LOAD_MB-[0-9]-[0-9]/SQL_LOAD_MB-#-#/ /exec_time=[0-9]*/exec_time=#/ /end_log_pos [0-9]*/end_log_pos #/ /# at [0-9]*/# at #/ /Xid = [0-9]*/Xid = #/ /xid=[0-9]*/xid=#/ /thread_id=[0-9]*/thread_id=#/ /table id [0-9]*/table id #/ /mapped to number [0-9]*/mapped to number #/ /server v [^ ]*/server v #.##.##/ /CRC32 0x[0-9a-f]*/CRC32 XXX/ /collation_server=[0-9]+/collation_server=X/ /character_set_client=[0-9]+/character_set_client=X/ /collation_connection=[0-9]+/collation_connection=X/
+--source include/search_pattern_in_file.inc
+
+--echo #
+--echo ##  Test Case 4:
+--echo #   Local file, multiple GTID ranges specified
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,1-2-0 --stop-position=0-1-4,1-2-3 --base64-output=NEVER  > OUT_FILE
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,1-2-0 --stop-position=0-1-4,1-2-3 --base64-output=NEVER  > $OUT_FILE
+--let SEARCH_PATTERN=end_log_pos[^\n]+
+--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
+--replace_regex /SQL_LOAD_MB-[0-9]-[0-9]/SQL_LOAD_MB-#-#/ /exec_time=[0-9]*/exec_time=#/ /end_log_pos [0-9]*/end_log_pos #/ /# at [0-9]*/# at #/ /Xid = [0-9]*/Xid = #/ /xid=[0-9]*/xid=#/ /thread_id=[0-9]*/thread_id=#/ /table id [0-9]*/table id #/ /mapped to number [0-9]*/mapped to number #/ /server v [^ ]*/server v #.##.##/ /CRC32 0x[0-9a-f]*/CRC32 XXX/ /collation_server=[0-9]+/collation_server=X/ /character_set_client=[0-9]+/character_set_client=X/ /collation_connection=[0-9]+/collation_connection=X/
+--source include/search_pattern_in_file.inc
+
+--echo #
+--echo ##  Test Case 5:
+--echo #   Local file, multiple GTID ranges specified where the domain ids are
+--echo # listed in different orders between start/stop position
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --stop-position=0-1-4,1-2-3 --start-position=1-2-0,0-1-1 --base64-output=NEVER > MYSQLTEST_VARDIR/tmp/binlog2.out
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --stop-position=0-1-4,1-2-3 --start-position=1-2-0,0-1-1 --base64-output=NEVER > $MYSQLTEST_VARDIR/tmp/binlog2.out
+--let SEARCH_PATTERN=end_log_pos[^\n]+
+--echo # --diff_files OUT_FILE MYSQLTEST_VARDIR/tmp/binlog2.out
+--diff_files $OUT_FILE $MYSQLTEST_VARDIR/tmp/binlog2.out
+
+
+########
+## TODO: Remote cases 6 and 7
+
+
+--echo ##############################
+--echo #      Error Cases
+--echo ##############################
+
+--echo #
+--echo ##  Error Case 1:
+--echo #   User provides GTID ranges with mismatched domain_ids
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=1-1-4 --base64-output=NEVER  > OUT_FILE
+--error 1
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1 --stop-position=1-1-4 --base64-output=NEVER > $OUT_FILE
+
+--echo #
+--echo ##  Error Case 2:
+--echo #   User provides GTID ranges with repeated domain ids
+--echo # MYSQL_BINLOG MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,0-1-8 --stop-position=0-1-4,0-1-12 --base64-output=NEVER  > OUT_FILE
+--error 1
+--exec $MYSQL_BINLOG $MYSQLD_DATADIR/master-bin.000001 --start-position=0-1-1,0-1-8 --stop-position=0-1-4,0-1-12 --base64-output=NEVER > $OUT_FILE
+
+
+--echo ##############################
+--echo #      Cleanup
+--echo ##############################
+DROP TABLE t1;
+DROP TABLE t2;
+--eval SET @@global.gtid_domain_id= $OLD_GTID_DOMAIN_ID
+--eval SET @@global.server_id= $OLD_SERVER_ID
